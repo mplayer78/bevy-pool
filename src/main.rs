@@ -9,6 +9,7 @@ fn main() {
         .add_startup_system(setup_graphics)
         .add_startup_system(setup_physics)
         .add_system(cue_physics)
+        .add_system(display_events)
         .run();
 }
 
@@ -25,7 +26,9 @@ const EDGE_WIDTH: f32 = 19.0;
 struct CueBall;
 
 #[derive(Component)]
-struct CueTip;
+struct CueTip {
+    has_contacted: bool
+}
 
 fn setup_physics(mut commands: Commands) {
     let h_edge = Collider::cuboid(TABLE_SIZE.0 / 2.0, EDGE_WIDTH / 2.0);
@@ -58,11 +61,12 @@ fn setup_physics(mut commands: Commands) {
         
     commands
         .spawn()
-        .insert(CueTip)
+        .insert(CueTip { has_contacted: false })
         .insert(ExternalForce::default())
+        .insert(Velocity::default())
         .insert(RigidBody::Dynamic)
         .insert(Collider::cuboid(1.0, 1.0))
-        .insert(Sensor(true))
+        .insert(ActiveEvents::COLLISION_EVENTS)
         .insert(GravityScale(0.0))
         .insert(Restitution::coefficient(0.95))
         .insert(AdditionalMassProperties::Mass(100.0))
@@ -76,18 +80,42 @@ fn setup_physics(mut commands: Commands) {
 fn cue_physics(
     rapier_context: Res<RapierContext>,
     keyboard_input: Res<Input<KeyCode>>,
-    mut cue_query: Query<(Entity, &mut ExternalForce), With<CueTip>>,
+    mut collision_events: EventReader<CollisionEvent>,
+    mut cue_query: Query<(Entity, &mut ExternalForce, &mut Velocity, &mut CueTip)>,
     mut cue_ball_query: Query<Entity, With<CueBall>>,
 ) {
-    for (cue_entity, mut cue_force) in cue_query.iter_mut() {
-        if keyboard_input.pressed(KeyCode::Space) {
-            cue_force.force = Vec2::new(0.0, 10000.0);
+    
+    let (cue_entity, mut cue_force, mut cue_velocity, mut cue) = cue_query.single_mut();
+    let mut ball_entity = cue_ball_query.single_mut();
+
+    if keyboard_input.pressed(KeyCode::Space) {
+        cue_force.force = Vec2::new(0.0, 10000.0);
+    }
+    
+    for collision_event in collision_events.iter() {
+        if let CollisionEvent::Started(handle1, handle2, _) = collision_event {
+            if (*handle1 == ball_entity && *handle2 == cue_entity) || 
+                (*handle2 == ball_entity && *handle1 == cue_entity) {
+                    println!("Ball Contact");
+                    cue.has_contacted = true;
+                }
         }
-        for ball_entity in cue_ball_query.iter() {
-            if rapier_context.intersection_pair(cue_entity, ball_entity) == Some(true) {
-                println!("Yep");
-                cue_force.force = Vec2::ZERO
-            }
-        }
+    }
+    
+    if cue.has_contacted && cue_velocity.linvel.length() > 0.0 {
+        cue_force.force = cue_velocity.linvel * 1000.0 * -1.0;
+    }
+}
+
+fn display_events(
+    mut collision_events: EventReader<CollisionEvent>,
+    mut contact_force_events: EventReader<ContactForceEvent>,
+) {
+    for collision_event in collision_events.iter() {
+        println!("Received collision event: {:?}", collision_event);
+    }
+
+    for contact_force_event in contact_force_events.iter() {
+        println!("Received contact force event: {:?}", contact_force_event);
     }
 }
